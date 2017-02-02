@@ -13,6 +13,9 @@
     #:datum-literals (*)
     [(_
       (~optional (~seq #:draw draw*:str) #:defaults ([draw* #'#f]))
+      (~optional (~and #:no-scale scale*)
+                 #:defaults
+                 ([scale* #'#f]))
       #:places p*:id ...
       #:transitions t*:id ...
       #:arcs a:arc ...
@@ -21,4 +24,7 @@
      #:with (t ...) (map (lambda (x) (format-symbol "t:~a" x)) (syntax->list #'(t* ...)))
      #:with (s ...) (map (lambda (x) (format-symbol "p:~a" x)) (syntax->list #'(s* ...)))
      #:with draw (if (syntax-e #'draw*) #'draw* "circo")
-     #'(#%module-begin (ui (term (((p ...) (t ...) ((a.f a.f2) ...)) ((s n) ...))) #:draw  'draw))]))
+     #:with scale? (if (keyword? (syntax-e #'scale*)) #f #t)
+     #'(#%module-begin (ui (term (((p ...) (t ...) ((a.f a.f2) ...)) ((s n) ...)))
+                           #:draw 'draw
+                           #:scale? 'scale?))]))

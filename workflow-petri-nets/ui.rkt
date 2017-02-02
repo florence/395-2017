@@ -1,7 +1,7 @@
 #lang at-exp racket/gui
 (provide ui)
 (require "model.rkt" redex/reduction-semantics pict)
-(define (ui S #:draw [draw "circo"])
+(define (ui S #:draw [draw "circo"] #:scale? [scale? #t])
   (define current-state (box S))
   (define init-pict (state->pict S draw))
   (define W (exact-ceiling (pict-width init-pict)))
@@ -12,14 +12,14 @@
   (define (scale* s)
     (define minrat
       (min
-       (if (> W W*)
+       (if (and scale? (> W W*))
            (/ W* W)
            1)
-       (if (> H H*)
+       (if (and scale? (> H H*))
            (/ H* H)
            1)))
     (scale s minrat))
-  (define current-pict (box (scale* init-pict)))
+  (define current-pict (box (pict->bitmap (scale* init-pict))))
   (define es
     (let ([es (make-eventspace)])
       (define base
@@ -34,20 +34,20 @@
       (define pict-container
         (new canvas%
              [parent vert]
-             [min-width (min W W*)]
-             [min-height (min H H*)]
+             [min-width (if scale (min W W*) W)]
+             [min-height (if scale? (min H H*) H)]
              [paint-callback
               (lambda (p dc)
                 (send dc erase)
                 (send dc draw-bitmap
-                      (pict->bitmap (unbox current-pict))
+                      (unbox current-pict)
                       0
                       0))]))
       (define button-container
         (new horizontal-panel%[parent vert]))
       (define (new-state! S)
         (set-box! current-state S)
-        (set-box! current-pict (scale* (state->pict S draw)))
+        (set-box! current-pict (pict->bitmap (scale* (state->pict S draw))))
         (send pict-container refresh)
         (send button-container change-children (const empty))
         (buttons))
