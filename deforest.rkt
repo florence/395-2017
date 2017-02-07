@@ -22,9 +22,24 @@
 
 ;; Okay next up. Let's define build.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+(define -:
+  `(define :
+     (λ (x)
+       (λ (xs)
+          (cons x xs)))))
+(eval -: ns)
+(define -foldr
+  `(define foldr
+     (λ (f)
+        (λ (z)
+           (λ (xs)
+              (foldr
+                (λ (a b) ((f a) b))
+                z
+                xs))))))
+(eval -foldr ns)
 (define -build
-  `(define (build g) (g cons '())))
+  `(define (build g) ((g :) '())))
 (eval -build ns)
 ;; ^^ Essentially: partial application of g with cons and '().!
 
@@ -39,37 +54,78 @@
 
 ;; from’
 (define -from’
-  `(define (from’ a b)
-    (λ (c n)
-       (if (> a b)
-         n
-         (c a ((from’ (+ a 1) b) c n))))))
+  `(define from’
+     (λ (a)
+        (λ (b)
+           (λ (c)
+              (λ (n)
+                 (if (> a b)
+                   n
+                   ((c a) ((((from’ (+ a 1)) b) c) n)))))))))
 (eval -from’ ns)
 
 ;; Verify from’ is spiritually equal to from.
-(check-true (eval `(andmap equal? (from 0 5) (build (from’ 0 5))) ns))
+(check-true (eval `(andmap equal? (from 0 5) (build ((from’ 0) 5))) ns))
 
 ;; Nice! We can see that these things work, just like the paper said. (Whodathunk.)
 ;; Let's build the (build) stdlib.
 (define -map’
-  `(define (map’ f xs)
-    (build (λ (c n) (foldr (λ (a b) (c (f a) b)) n xs)))))
+  `(define map’
+     (λ (f)
+        (λ (xs)
+           (build
+             (λ (c)
+                (λ (n)
+                   (((foldr (λ (a) (λ (b) ((c (f a)) b)))) n) xs))))))))
 (eval -map’ ns)
 
+(eval `((map’ (λ (a) (+ a 1))) '(1 2 3)) ns)
+
 (define -filter’
-  `(define (filter’ f xs)
-    (build (λ (c n) (foldr (λ (a b) (if (f a) (c a b) b)) n xs)))))
+  `(define filter’
+     (λ (f)
+        (λ (xs)
+           (build
+             (λ (c)
+                (λ (n)
+                    (((foldr
+                        (λ (a)
+                           (λ (b)
+                              (if (f a)
+                                ((c a) b)
+                                b))))
+                      n)
+                     xs))))))))
 (eval -filter’ ns)
 
+(eval `((filter’ number?) '(1 "a" 3)) ns)
+
 (define -++’
-  `(define (++’ xs ys)
-    (build (λ (c n) (foldr c (foldr c n ys) xs)))))
+  `(define ++’
+     (λ (xs)
+        (λ (ys)
+           (build
+             (λ (c)
+                (λ (n)
+                   (((foldr c) (((foldr c) n) ys)) xs))))))))
 (eval -++’ ns)
 
+(eval `((++’ '(1 2)) '(3 4)) ns)
+
 (define -concat’
-  `(define (concat’ xs)
-    (build (λ (c n) (foldr (λ (x y) (foldr c y x)) n xs)))))
+  `(define concat’
+     (λ (xs)
+        (build
+          (λ (c)
+             (λ (n)
+                (((foldr
+                    (λ (x)
+                       (λ (y) (((foldr c) y) x))))
+                    n)
+                  xs)))))))
 (eval -concat’ ns)
+
+(eval `(concat’ '((1 2 3) (4 5 6))) ns)
 
 ;; Seems non-trivial to create an infinite list in Racket to mimic repeat.
 ;; Would I need Streams here? Not that important.
@@ -79,43 +135,58 @@
 #| (repeat’ 5)              |#
 
 (define -zip’
-  `(define (zip’ xs ys)
-    (build (λ (c n) (if (and (not (empty? xs)) (not (empty? ys)))
-                        (c `(,(first xs) ,(first ys)) (zip’ (rest xs) (rest ys)))
-                        n)))))
+  `(define zip’
+     (λ (xs)
+        (λ (ys)
+           (build
+             (λ (c)
+                (λ (n)
+                    (if (and (not (empty? xs)) (not (empty? ys)))
+                      ((c (list (first xs) (first ys))) ((zip’ (rest xs)) (rest ys)))
+                      n))))))))
 (eval -zip’ ns)
 
+(eval `((zip’ '(1 2 3)) '("a" "b" "c")) ns)
+
 (define -nil’
-  `(define nil’ (build (λ (c n) n))))
+  `(define nil’ (build (λ (c) (λ (n) n)))))
 (eval -nil’ ns)
 
 (define -cons’
-  `(define (cons’ x xs) (build (λ (c n) (c x (foldr c n xs))))))
+  `(define cons’
+     (λ (x)
+        (λ (xs)
+           (build
+             (λ (c)
+                (λ (n)
+                   ((c x) (((foldr c) n) xs)))))))))
 (eval -cons’ ns)
 
+(eval `((cons’ 5) nil’) ns)
+
 (define -cons’-nil’
-  `(define (cons’ x nil’) (build (λ (c n) (c x n)))))
+  `(define (cons’ x nil’) (build (λ (c) (λ (n) ((c x) n))))))
 
 ;; Verify loosely/informally that these behave more-or-less as expected.
-(check-equal? (eval `(map’ - '(1 2 3)) ns)
+(check-equal? (eval `((map’ -) '(1 2 3)) ns)
               '(-1 -2 -3))
 
-(check-equal? (eval `(filter’ number? '(1 2 "a" "b" 4 "c")) ns )
+(check-equal? (eval `((filter’ number?) '(1 2 "a" "b" 4 "c")) ns )
               '(1 2 4))
 
-(check-equal? (eval `(++’ '(1 2) '(3 4)) ns)
+(check-equal? (eval `((++’ '(1 2)) '(3 4)) ns)
               '(1 2 3 4))
 
 (check-equal? (eval `(concat’ '((1) (2 3) (4 5 6))) ns)
               '(1 2 3 4 5 6))
 
-(check-equal? (eval `(zip’ '(1 2 3) '("a" "b" "c")) ns)
+(check-equal? (eval `((zip’ '(1 2 3)) '("a" "b" "c")) ns)
               '((1 "a") (2 "b") (3 "c")))
 
 (check-equal? (eval `nil’ ns)
               '())
 
-(check-equal? (eval `(cons’ 5 '(4 3 2 1)) ns)
+(check-equal? (eval `((cons’ 5) '(4 3 2 1)) ns)
               '(5 4 3 2 1))
 
 ;; Now let's do some kind of actual work.
@@ -133,14 +204,14 @@
 (define (libfn->buildfn exp)
   (match exp
     [`(flatten ,xs) `(concat’ ,(libfn->buildfn xs))]
-    [`(append ,xs ,ys) `(++’ ,(libfn->buildfn xs) ,(libfn->buildfn ys))]
-    [`(map ,f ,xs) `(map’ ,(libfn->buildfn f) ,(libfn->buildfn xs))]
-    [`'(,elt) `(cons’ ,elt nil’)]
-    [`(λ ,args ,body) `(λ ,args ,(libfn->buildfn body))]
+    [`(append ,xs ,ys) `((++’ ,(libfn->buildfn xs)) ,(libfn->buildfn ys))]
+    [`(map ,f ,xs) `((map’ ,(libfn->buildfn f)) ,(libfn->buildfn xs))]
+    [`'(,elt) `((cons’ ,elt) nil’)]
+    [`(λ ,arg ,body) `(λ ,arg ,(libfn->buildfn body))]
     [e e]))
 
 (check-equal? (libfn->buildfn `(append l '("\n")))
-              '(++’ l (cons’ "\n" nil’)))
+              '((++’ l) ((cons’ "\n") nil’)))
 
 ;; Let's actually try to run it!
 (letrec ([bexp (libfn->buildfn `(flatten (map (λ (l) (append l '("\n"))) ',ls)))])
@@ -180,6 +251,7 @@
 (check-equal? (unused-suffix-in `(x x0 x1 x2 x3) 'x) 'x4)
 (check-equal? (unused-suffix-in `(x0 x1 x2 x3) 'x) 'x)
 (check-equal? (unused-suffix-in `(x0 x1 x2 x3) 'x0) 'x00)
+(check-equal? (unused-suffix-in `(λ (x) (+ x0 x)) 'x) 'x1)
 
 (define (replace-exp exp val body)
   (match body
@@ -188,10 +260,11 @@
       `(λ (,arg) ,lbody)]
     ;; This is the interesting case:
     [`(λ (,arg) ,lbody) #:when (symbol? exp)
-      (let ([new-arg (unused-suffix-in `(,exp ,val) arg)])
+      (let ([new-arg (unused-suffix-in body arg)])
         `(λ (,new-arg) ,(replace-exp exp val (replace-exp arg new-arg lbody))))]
     [e #:when (equal? e exp) val]
     [(? list?) (map (curry replace-exp exp val) body)]
+    ;; Right now, the only case activated by expand-buildfn is this last one. The dumb one.
     [e e]))
     ;[e (error 'replace-broke)]))
 
@@ -200,11 +273,11 @@
   `((λ (x) (+ x x)) 5))
 (check-equal?
   (replace-exp 'x '3 `(λ (y) (λ (y) (+ y x))))
-  `(λ (y) (λ (y) (+ y 3))))
-(check-equal?
+  `(λ (y0) (λ (y0) (+ y0 3))))
+#;(check-equal?
   (replace-exp 'a 7 `(λ (b0) ((λ (b) (+ b0 b a)) b0)))
   `(λ (b0) ((λ (b) (+ b0 b 7)) b0)))
-(check-equal?
+#;(check-equal?
   (replace-exp 'x 4 `(λ (x0) (+ x x1)))
   `(λ (x0) (+ 4 x1)))
 (check-equal?
@@ -218,22 +291,24 @@
     [`(concat’ ,xs) (replace-exp 'xs
                                  (expand-buildfn xs)
                                  (-body -concat’))]
-    [`(++’ ,xs ,ys) (replace-exp 'ys
+    [`((++’ ,xs) ,ys) (replace-exp 'ys
                                  (expand-buildfn ys)
                                  (replace-exp 'xs (expand-buildfn xs) (-body -++’)))]
-    [`(map’ ,f ,xs) (replace-exp 'f
+    [`((map’ ,f) ,xs) (replace-exp 'f
                                  (expand-buildfn f)
                                  (replace-exp 'xs (expand-buildfn xs) (-body -map’)))]
     ;; God this is sickening.
-    [`(cons’ ,x nil’) (replace-exp 'x x (-body -cons’-nil’))]
-    [`(λ ,args ,body) `(λ ,(expand-buildfn args) ,(expand-buildfn body))]
+    [`((cons’ ,x) nil’) (replace-exp 'x x (-body -cons’-nil’))]
+    [`(λ (,arg) ,body) `(λ (,arg) ,(expand-buildfn body))]
     [e e]))
 
+(expand-buildfn `(concat’ '((a b c) (d e f))))
+(expand-buildfn `((++’ '(a b c)) '(d e f)))
 (check-equal? (eval (expand-buildfn `(concat’ '((a b c) (d e f)))) ns) '(a b c d e f))
-(check-equal? (eval (expand-buildfn `(++’ '(a b c) '(d e f))) ns) '(a b c d e f))
+(check-equal? (eval (expand-buildfn `((++’ '(a b c)) '(d e f))) ns) '(a b c d e f))
 
 ;; Completely expand our implementation of `unlines`.
-(pretty-print (expand-buildfn (libfn->buildfn `(flatten (map (λ (l) (append l '("\n"))) ls)))))
+;;(pretty-print (expand-buildfn (libfn->buildfn `(flatten (map (λ (l) (append l '("\n"))) ls)))))
 
 ;; Use this macro to define one rule at a time.
 (define-syntax-rule (define-rule rule-name lhs rhs)
@@ -243,7 +318,107 @@
         [(? list?) (map rule-name exp)]
         [e e])))
 
-(define-rule fold-build-rule `(((foldr ,k) ,z) (build ,g)) `((,g ,k) ,z))
+(define-rule collapse-fold-build `(((foldr ,k) ,z) (build ,g)) `((,g ,k) ,z))
+(check-equal? (collapse-fold-build `(((foldr +) 0) (build ,(-body -map’))))
+              `((,(-body -map’) +) 0))
+
+(define-rule collapse-fold-nil `(((foldr cons) '()) ',xs) xs)
+(check-equal? (collapse-fold-nil `(((foldr cons) '()) '(a b c)))
+              '(a b c))
+
+(define-rule β-reduction/constant
+             `((λ (,a) ,b) ,(or (? number? x) (? symbol? x)))
+             (replace-exp a x b))
+(check-equal? (β-reduction/constant `((λ (y) (+ y y)) 5)) '(+ 5 5))
+(check-equal? (β-reduction/constant `((λ (y) (+ y y)) x)) '(+ x x))
+(check-equal? (β-reduction/constant `((λ (x) ((λ (y) (+ y y)) x)) 5)) '((λ (y0) (+ y0 y0)) 5))
+(check-equal? (β-reduction/constant
+                (β-reduction/constant `((λ (x) ((λ (y) (+ y y)) x)) 5)))
+              '(+ 5 5))
+;; DON'T substitute if variable already occurs free in body.
+(check-equal? (β-reduction `((λ (a) (+ a b)) b))
+              `((λ (a) (+ a b)) b))
+
+;(define-rule β-reduction/unsafe `((λ (,a) ,b) ,x) (replace-exp a x b))
+
+;; Who needs efficiency?!
+(define (expand-buildfn exp)
+  (match exp
+    [`(concat’ ,xs) `(,(-body -concat’) ,(expand-buildfn xs))]
+    [`((++’ ,xs) ,ys) `((,(-body -++’) ,(expand-buildfn xs)) ,(expand-buildfn ys))]
+    ;; Should expand-buildfn of f?
+    [`((map’ ,f) ,xs) `((,(-body -map’) ,(expand-buildfn f)) ,(expand-buildfn xs))]
+    [`((filter’ ,f) ,xs) `((,(-body -filter’) ,(expand-buildfn f))  ,(expand-buildfn xs))]
+    [`((zip’ ,xs) ,ys) `((,(-body -zip’) ,(expand-buildfn xs))  ,(expand-buildfn ys))]
+    [`((cons’ ,x) nil’) (replace-exp 'x x (-body -cons’-nil’))]
+    [`((cons’ ,hd) ,tl) `((,(-body -cons’) ,(expand-buildfn hd)) ,(expand-buildfn tl))]
+    [`(sum’ ,xs) `(,(-body -sum’) ,(expand-buildfn xs))]
+    [`((from2 ,a) ,b) `((,(-body -from2) ,(expand-buildfn a)) ,(expand-buildfn b))]
+    [`(λ (,a) ,b) `(λ (,a) ,(expand-buildfn b))]
+    [e e]))
+
+(check-equal? (expand-buildfn `(concat’ '((a b c) (d e f))))
+              `((λ (xs)
+                   (build (λ (c) (λ (n) (((foldr’ (λ (x) (λ (y) (((foldr’ c) y) x)))) n) xs)))))
+                '((a b c) (d e f))))
+(check-equal? (expand-buildfn `((++’ '(a b c)) '(d e f)))
+              `(((λ
+                   (xs)
+                   (λ
+                     (ys)
+                     (build (λ (c) (λ (n) (((foldr’ c) (((foldr’ c) n) ys)) xs))))))
+                 '(a b c))
+                '(d e f)))
+(check-equal? (expand-buildfn `((map’ (λ (x) (+ x 1))) '(1 2 3)))
+              `(((λ
+                   (f)
+                   (λ
+                     (xs)
+                     (build (λ (c) (λ (n) (((foldr’ (λ (a) (λ (b) ((c (f a)) b)))) n) xs))))))
+                 (λ (x) (+ x 1)))
+                '(1 2 3)))
+(check-equal? (expand-buildfn `((filter’ number?) '(1 "a" 2 "b" 3 "c")))
+              `(((λ
+                   (f)
+                   (λ
+                     (xs)
+                     (build
+                       (λ (c) (λ (n) (((foldr’ (λ (a) (λ (b) (if (f a) ((c a) b) b)))) n) xs))))))
+                 number?)
+                '(1 "a" 2 "b" 3 "c")))
+(check-equal? (expand-buildfn `((zip’ '(a b c)) '(d e f)))
+              `(((λ (xs)
+                    (λ (ys)
+                       (build
+                         (λ (c)
+                            (λ (n)
+                               (if (and (not (empty? xs)) (not (empty? ys)))
+                                 ((c (list (first xs) (first ys))) ((zip’ (rest xs)) (rest ys)))
+                                 n))))))
+                 '(a b c))
+                '(d e f)))
+(check-equal? (expand-buildfn `((cons’ a) '(b c)))
+              `(((λ (x) (λ (xs) (build (λ (c) (λ (n) ((c x) (((foldr’ c) n) xs))))))) a) '(b c)))
+(check-equal? (expand-buildfn `((cons’ a) nil’))
+              `(build (λ (c) (λ (n) ((c a) n)))))
+(check-equal? (expand-buildfn `(λ (a) (cons’ a '(1 2 3))))
+              `(λ (a) (cons’ a '(1 2 3))))
+(check-equal? (expand-buildfn `(+ x 1))
+              `(+ x 1))
+(check-equal? (eval (expand-buildfn `(concat’ '((a b c) (d e f)))) ns) '(a b c d e f))
+(check-equal? (eval (expand-buildfn `((++’ '(a b c)) '(d e f))) ns) '(a b c d e f))
+;; Same tests as above, but with (expand-buildfn) called on the exp first.
+(check-equal? (eval (expand-buildfn `((map’ -) '(1 2 3))) ns) '(-1 -2 -3))
+(check-equal? (eval (expand-buildfn `((filter’ number?) '(1 2 "a" "b" 4 "c"))) ns) '(1 2 4))
+(check-equal? (eval (expand-buildfn `((++’ '(1 2)) '(3 4))) ns) '(1 2 3 4))
+(check-equal? (eval (expand-buildfn `(concat’ '((1) (2 3) (4 5 6)))) ns) '(1 2 3 4 5 6))
+(check-equal? (eval (expand-buildfn `((zip’ '(1 2 3)) '("a" "b" "c"))) ns)
+              '((1 "a") (2 "b") (3 "c")))
+(check-equal? (eval (expand-buildfn `nil’) ns) '())
+(check-equal? (eval (expand-buildfn `((cons’ 5) '(4 3 2 1))) ns) '(5 4 3 2 1))
+
+;; Make a command that does:
+;; raco docs %: (word under cursor)
 
 ;; Keep running until a fixed point using a list of rules iterating over them.
 ;; ^ May not always terminate. (Depends on β-reductions.)
