@@ -420,6 +420,9 @@
 ;; Make a command that does:
 ;; raco docs %: (word under cursor)
 
+;; Make a command that does:
+;; raco docs %: (word under cursor)
+
 ;; Keep running until a fixed point using a list of rules iterating over them.
 ;; ^ May not always terminate. (Depends on β-reductions.)
 
