@@ -10,6 +10,8 @@
 (define-namespace-anchor a)
 (define ns (namespace-anchor->namespace a))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; Let's write up the example optimized "all" for practice.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (all’ p xs)
@@ -20,7 +22,9 @@
 
 (check-true (and (all number? '(5 5 5)) (all’ number? '(5 5 5))))
 
-;; Okay next up. Let's define build.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Okay next up. Let's define build and foldr for our transformations.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define -:
   `(define :
@@ -28,6 +32,7 @@
        (λ (xs)
           (cons x xs)))))
 (eval -: ns)
+
 (define -foldr’
   `(define foldr’
      (λ (f)
@@ -38,11 +43,14 @@
                 z
                 xs))))))
 (eval -foldr’ ns)
+
 (define -build
   `(define (build g) ((g :) '())))
 (eval -build ns)
 ;; ^^ Essentially: partial application of g with cons and '().!
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; Let's do the from example.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -66,9 +74,12 @@
 
 ;; Verify from’ is spiritually equal to from.
 (check-true (eval `(andmap equal? (from 0 5) (build ((from’ 0) 5))) ns))
-
 ;; Nice! We can see that these things work, just like the paper said. (Whodathunk.)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; Let's build the (build) stdlib.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define -map’
   `(define map’
      (λ (f)
@@ -189,8 +200,11 @@
 (check-equal? (eval `((cons’ 5) '(4 3 2 1)) ns)
               '(5 4 3 2 1))
 
-;; Now let's do some kind of actual work.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 ;; Convert unlines to use build-based library functions.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; In Haskell, strings are lists, which means racket don't do that... So we fake it.
 (define (unlines ls) (flatten (map (λ (l) (append l '("\n"))) ls)))
 (define unlines-expr `(λ (ls) (flatten (map (λ (l) (append l '("\n"))) ls))))
@@ -201,6 +215,9 @@
 
 ;; flatten -> concat’
 ;; append  -> append’
+;; map -> map’
+;; filter -> filter’
+;; ...
 
 (define (libfn->buildfn exp)
   (match exp
@@ -221,11 +238,11 @@
   (check-equal? (apply string-append (eval bexp ns)) "this\n\nsucKs\n"))
 ;; But hey, the transformation is (roughly) working on the body of unlines.
 
-;; Let's try expanding buildfns using their bodies.
-
-;; Oh man this is awful. What have I done.
-(define -body third)
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Let's try inlining buildfns using their quoted bodies from above.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; We need a function for capture-avoiding substitution.
 ;; Replace all free occurrences of exp with val in body.
 (define (symbol-add-suffix s1 s2)
   (string->symbol (string-append (symbol->string s1) (~a s2))))
@@ -296,85 +313,9 @@
   (replace-exp 'x 'y `(λ (y) (+ x y)))
   `(λ (y0) (+ y y0)))
 
-;; Use this macro to define one rule at a time.
-(define-syntax-rule (define-rule rule-name lhs rhs)
-  (define (rule-name exp)
-    (match exp
-        [lhs rhs]
-        [(? list?) (map rule-name exp)]
-        [e e])))
-
-(define-rule collapse-fold-build `(((foldr’ ,k) ,z) (build ,g)) `((,g ,k) ,z))
-(check-equal? (collapse-fold-build `(((foldr’ +) 0) (build ,(-body -map’))))
-              `((,(-body -map’) +) 0))
-
-(define-rule collapse-fold-nil `(((foldr’ cons) '()) ',xs) xs)
-(check-equal? (collapse-fold-nil `(((foldr’ cons) '()) '(a b c)))
-              '(a b c))
-
-;; Application with variable, occurrence where variable doesn't occur free in λ body.
-;; Couldn't figure out how to pass the "variable free in λ body" test case with macro definition.
-(define (β-reduction/symbol exp)
-  (match exp
-        [`((λ (,a) ,b) ,x) #:when (or (equal? a x)
-                                      (and (symbol? x) (not-in b x)))
-          (replace-exp a x b)]
-        [(? list?) (map β-reduction/symbol exp)]
-        [e e]))
-
-(define constant/c (or/c string? number?))
-
-(define-rule β-reduction/constant
-             `((λ (,a) ,b) ,(? constant/c x))
-             (replace-exp a x b))
-(define quote-list?
-  (λ (x)
-     (and
-       (list? x)
-       (equal? (first x) 'quote)
-       ((or/c (listof constant/c) (listof (listof constant/c))) (second x)))))
-
-(define-rule β-reduction/list
-             `((λ (,a) ,b) ,(? quote-list? x))
-             (replace-exp a x b))
-
-(define (build? x) (and (list? x) (equal? (first x) 'build)))
-(define-rule β-reduction/build
-             `((λ (,a) ,b) ,(? build? x))
-             (replace-exp a x b))
-
-(define-rule β-reduction/lambda/unsafe!
-             `((λ (,a) ,b) ,(? (λ (x) (and (list? x) (equal? (first x) 'λ))) x))
-             (replace-exp a x b))
-
-(define (β-reduction exp)
-  (or
-    (for/first ([reduction (list β-reduction/constant
-                                 β-reduction/lambda/unsafe!
-                                 β-reduction/list
-                                 β-reduction/build
-                                 β-reduction/symbol)]
-                #:when (not (equal? (reduction exp) exp)))
-               (reduction exp))
-    exp))
-
-;; Substitute simple argument with number.
-(check-equal? (β-reduction `((λ (y) (+ y y)) 5)) '(+ 5 5))
-;; Substitute simple argument with free variable that isn't free in body.
-(check-equal? (β-reduction `((λ (y) (+ y y)) x)) '(+ x x))
-;; Reduce outer lambda.
-(check-equal? (β-reduction `((λ (x) ((λ (y) (+ y y)) x)) 5)) '((λ (y) (+ y y)) 5))
-;; Reduce outer and then inner lambda.
-(check-equal? (β-reduction
-                (β-reduction `((λ (x) ((λ (y) (+ y y)) x)) 5)))
-              '(+ 5 5))
-;; DON'T substitute if variable already occurs free in body.
-(check-equal? (β-reduction `((λ (a) (+ a b)) b))
-              `((λ (a) (+ a b)) b))
-
-;(define-rule β-reduction/unsafe `((λ (,a) ,b) ,x) (replace-exp a x b))
-
-;; Who needs efficiency?!
+;; Oh man this is awful. What have I done.
+(define -body third)
+;; Now we can inline buildfn bodies.
 (define (expand-buildfn exp)
   (match exp
     [`(concat’ ,xs) `(,(-body -concat’) ,(expand-buildfn xs))]
@@ -385,6 +326,8 @@
     [`((zip’ ,xs) ,ys) `((,(-body -zip’) ,(expand-buildfn xs))  ,(expand-buildfn ys))]
     [`((cons’ ,x) nil’) (replace-exp 'x x (-body -cons’-nil’))]
     [`((cons’ ,hd) ,tl) `((,(-body -cons’) ,(expand-buildfn hd)) ,(expand-buildfn tl))]
+    ;; Non-library functions.
+    ;;--------------------------------------------------------------------------------------
     [`(sum’ ,xs) `(,(-body -sum’) ,(expand-buildfn xs))]
     [`((from2 ,a) ,b) `((,(-body -from2) ,(expand-buildfn a)) ,(expand-buildfn b))]
     [`(λ (,a) ,b) `(λ (,a) ,(expand-buildfn b))]
@@ -433,7 +376,7 @@
 (check-equal? (expand-buildfn `((cons’ a) '(b c)))
               `(((λ (x) (λ (xs) (build (λ (c) (λ (n) ((c x) (((foldr’ c) n) xs))))))) a) '(b c)))
 (check-equal? (expand-buildfn `((cons’ a) nil’))
-              `(build (λ (c n) (c a n))))
+              `(build (λ (c) (λ (n) ((c a) n)))))
 (check-equal? (expand-buildfn `(λ (a) (cons’ a '(1 2 3))))
               `(λ (a) (cons’ a '(1 2 3))))
 (check-equal? (expand-buildfn `(+ x 1))
@@ -450,13 +393,94 @@
 (check-equal? (eval (expand-buildfn `nil’) ns) '())
 (check-equal? (eval (expand-buildfn `((cons’ 5) '(4 3 2 1))) ns) '(5 4 3 2 1))
 
-;; Make a command that does:
-;; raco docs %: (word under cursor)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Now let's actually write up some transformation rules for deforesting stuff.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Use this macro to define one rule at a time.
+(define-syntax-rule (define-rule rule-name lhs rhs)
+  (define (rule-name exp)
+    (match exp
+        [lhs rhs]
+        [(? list?) (map rule-name exp)]
+        [e e])))
 
-;; Keep running until a fixed point using a list of rules iterating over them.
-;; ^ May not always terminate. (Depends on β-reductions.)
+(define-rule collapse-fold-build `(((foldr’ ,k) ,z) (build ,g)) `((,g ,k) ,z))
+(check-equal? (collapse-fold-build `(((foldr’ +) 0) (build ,(-body -map’))))
+              `((,(-body -map’) +) 0))
 
-;; Loop: 1. expand 2. fold/build 3. fold/nil 4. β-reduction/constant
+(define-rule collapse-fold-nil `(((foldr’ cons) '()) ',xs) xs)
+(check-equal? (collapse-fold-nil `(((foldr’ cons) '()) '(a b c)))
+              '(a b c))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; β-reduction!
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Application with variable, occurrence where variable doesn't occur free in λ body.
+;; Couldn't figure out how to pass the "variable free in λ body" test case with macro definition.
+;; β-reduction cases.
+(define (β-reduction/symbol exp)
+  (match exp
+        [`((λ (,a) ,b) ,x) #:when (or (equal? a x)
+                                      (and (symbol? x) (not-in b x)))
+          (replace-exp a x b)]
+        [(? list?) (map β-reduction/symbol exp)]
+        [e e]))
+
+(define constant/c (or/c string? number?))
+(define-rule β-reduction/constant
+             `((λ (,a) ,b) ,(? constant/c x))
+             (replace-exp a x b))
+
+(define quote-list?
+  (λ (x)
+     (and
+       (list? x)
+       (equal? (first x) 'quote)
+       ((or/c (listof constant/c) (listof (listof constant/c))) (second x)))))
+(define-rule β-reduction/list
+             `((λ (,a) ,b) ,(? quote-list? x))
+             (replace-exp a x b))
+
+(define (build? x) (and (list? x) (equal? (first x) 'build)))
+(define-rule β-reduction/build
+             `((λ (,a) ,b) ,(? build? x))
+             (replace-exp a x b))
+
+(define-rule β-reduction/lambda/unsafe!
+             `((λ (,a) ,b) ,(? (λ (x) (and (list? x) (equal? (first x) 'λ))) x))
+             (replace-exp a x b))
+
+(define (β-reduction exp)
+  (or
+    (for/first ([reduction (list β-reduction/constant
+                                 β-reduction/lambda/unsafe!
+                                 β-reduction/list
+                                 β-reduction/build
+                                 β-reduction/symbol)]
+                #:when (not (equal? (reduction exp) exp)))
+               (reduction exp))
+    exp))
+
+;; Substitute simple argument with number.
+(check-equal? (β-reduction `((λ (y) (+ y y)) 5)) '(+ 5 5))
+;; Substitute simple argument with free variable that isn't free in body.
+(check-equal? (β-reduction `((λ (y) (+ y y)) x)) '(+ x x))
+;; Reduce outer lambda.
+(check-equal? (β-reduction `((λ (x) ((λ (y) (+ y y)) x)) 5)) '((λ (y) (+ y y)) 5))
+;; Reduce outer and then inner lambda.
+(check-equal? (β-reduction
+                (β-reduction `((λ (x) ((λ (y) (+ y y)) x)) 5)))
+              '(+ 5 5))
+;; DON'T substitute if variable already occurs free in body.
+(check-equal? (β-reduction `((λ (a) (+ a b)) b))
+              `((λ (a) (+ a b)) b))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Manually apply transformations to the (sum from) example.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define -from2
   `(define from2
      (λ (a)
@@ -484,11 +508,13 @@
 (check-equal? (eval `((from2 0) 5) ns) '(0 1 2 3 4 5))
 (check-equal? (eval `(sum’ ((from2 0) 5)) ns) 15)
 
-(collapse-fold-build
-  (β-reduction/build
-    (β-reduction/constant
+(check-equal?
+  (collapse-fold-build
+    (β-reduction/build
       (β-reduction/constant
-        (expand-buildfn `(sum’ ((from2 0) 5)))))))
+        (β-reduction/constant
+          (expand-buildfn `(sum’ ((from2 0) 5)))))))
+  '((((from’ 0) 5) (λ (a) (λ (b) (+ a b)))) 0))
 
 (check-equal?
   (eval
@@ -500,7 +526,10 @@
     ns)
   15)
 
-;; Let's loop it.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Apply deforestation transformations in a loop until reaching a fixed point.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (deforest-maybe exp)
   (for/first ([reduction (list expand-buildfn
                                β-reduction
@@ -522,10 +551,14 @@
         `(,acts ,exp))))
   (deforest-fxpt-inner exp '()))
 
-(deforest-fxpt `(sum’ ((from2 0) 5)))
+;; The composition of multiple operations reduces nicely.
+;(pretty-print (deforest-fxpt `(sum’ ((from2 0) 5))))
+
+;; The way that functions are defined is very important. They must be properly generalized.
+;(pretty-print (deforest-fxpt `(sum’ ((from3 0) 5))))
 
 ;; Unlines is done!
-(pretty-print
+#;(pretty-print
   (β-reduction
     (β-reduction
       (collapse-fold-build
@@ -547,5 +580,11 @@
                                       (β-reduction
                                         `(,(libfn->buildfn unlines-expr) ',ls)))))))))))))))))))))
 
-(pretty-print (deforest-fxpt `(,(libfn->buildfn unlines-expr) ',ls)))
+;; The more complex example from the paper also reduces cleanly, in a similar series of steps.
+;(pretty-print (deforest-fxpt `(,(libfn->buildfn unlines-expr) ',ls)))
+(display
+  (apply string-append (eval (second (deforest-fxpt `(,(libfn->buildfn unlines-expr) ',ls))) ns)))
+
+;; Missing test cases: zip’, filter’, all’
+;; Possible areas for expansion: generalized inlining.
 
