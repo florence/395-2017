@@ -1,5 +1,6 @@
 #lang s-exp "lang.rkt"
 #:draw "dot"
+#:no-scale
 #:places
 start
 looking-at-options
